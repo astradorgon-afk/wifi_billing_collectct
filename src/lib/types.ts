@@ -195,3 +195,11 @@ export interface AuditLogEntry {
   after_json: string | null;
   device_id: string | null;
 }
+
+export interface SyncState {
+  configured: boolean;
+  enabled: boolean;
+  syncing: boolean;
+  lastSync: string | null;
+  lastError: string | null;
+}

@@ -34,6 +34,29 @@ export function setSaveFailureHandler(fn: (msg: string) => void): void {
   onSaveFailure = fn;
 }
 
+/* ------------------------------------------------------ mutation hooks -- */
+
+/** Notified after every successful DB write (used by the online sync engine). */
+type MutationCb = () => void;
+const mutationCbs: MutationCb[] = [];
+export function onMutate(cb: MutationCb): () => void {
+  mutationCbs.push(cb);
+  return () => {
+    const i = mutationCbs.indexOf(cb);
+    if (i >= 0) mutationCbs.splice(i, 1);
+  };
+}
+
+function fireMutation(): void {
+  for (const cb of mutationCbs) {
+    try {
+      cb();
+    } catch {
+      /* a hook must never break the write */
+    }
+  }
+}
+
 /**
  * BroadcastChannel so open tabs reload after another tab persists.
  * A tab does not receive its own messages, so writers are unaffected.
@@ -275,6 +298,7 @@ export async function run(
     throw err;
   }
   bumpRevision();
+  fireMutation();
   if (opts.immediate) await saveNow().catch((e) => console.error("Immediate save failed:", e));
   else scheduleSave();
 }
@@ -294,6 +318,7 @@ export async function runBatch(
     throw err;
   }
   bumpRevision();
+  fireMutation();
   if (opts.immediate) await saveNow().catch((e) => console.error("Immediate save failed:", e));
   else scheduleSave();
 }

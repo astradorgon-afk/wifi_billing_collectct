@@ -136,9 +136,9 @@ export async function ensureDefaultUsers(): Promise<void> {
   const statements = [];
   for (const u of DEFAULT_USERS) {
     statements.push({
-      sql: `INSERT OR IGNORE INTO users (id, username, name, role, pin_hash, active, must_change_pin, created_at)
-            VALUES (?,?,?,?,?,1,1,?)`,
-      params: [uid(), u.username, u.name, u.role, await hashPin(u.pin), now],
+      sql: `INSERT OR IGNORE INTO users (id, username, name, role, pin_hash, active, must_change_pin, created_at, updated_at)
+            VALUES (?,?,?,?,?,1,1,?,?)`,
+      params: [uid(), u.username, u.name, u.role, await hashPin(u.pin), now, now],
     });
   }
   await runBatch(statements);
@@ -191,7 +191,10 @@ export async function changePin(
 
   await runBatch(
     [
-      { sql: `UPDATE users SET pin_hash=?, must_change_pin=0 WHERE id=?`, params },
+      {
+        sql: `UPDATE users SET pin_hash=?, must_change_pin=0, updated_at=? WHERE id=?`,
+        params: [params[0], nowISO(), params[1]],
+      },
       auditStatement("user.pin_changed", "users", userId, null, null),
     ],
     { immediate: true },
@@ -218,9 +221,9 @@ export async function createUser(input: {
   await runBatch(
     [
       {
-        sql: `INSERT INTO users (id, username, name, role, pin_hash, active, must_change_pin, created_at)
-              VALUES (?,?,?,?,?,1,1,?)`,
-        params: [id, username, input.name.trim(), input.role, await hashPin(input.pin), nowISO()],
+        sql: `INSERT INTO users (id, username, name, role, pin_hash, active, must_change_pin, created_at, updated_at)
+              VALUES (?,?,?,?,?,1,1,?,?)`,
+        params: [id, username, input.name.trim(), input.role, await hashPin(input.pin), nowISO(), nowISO()],
       },
       auditStatement("user.created", "users", id, null, { username, name: input.name, role: input.role }),
     ],
@@ -232,7 +235,7 @@ export async function createUser(input: {
 export async function setUserActive(userId: string, active: boolean): Promise<void> {
   await runBatch(
     [
-      { sql: `UPDATE users SET active=? WHERE id=?`, params: [active ? 1 : 0, userId] },
+      { sql: `UPDATE users SET active=?, updated_at=? WHERE id=?`, params: [active ? 1 : 0, nowISO(), userId] },
       auditStatement(active ? "user.activated" : "user.deactivated", "users", userId, { active: !active }, { active }),
     ],
     { immediate: true },
@@ -243,7 +246,7 @@ export async function setUserActive(userId: string, active: boolean): Promise<vo
 export async function resetUserPin(userId: string): Promise<void> {
   await runBatch(
     [
-      { sql: `UPDATE users SET must_change_pin=1 WHERE id=?`, params: [userId] },
+      { sql: `UPDATE users SET must_change_pin=1, updated_at=? WHERE id=?`, params: [nowISO(), userId] },
       auditStatement("user.pin_reset", "users", userId, null, { forced: true }),
     ],
     { immediate: true },

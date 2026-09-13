@@ -29,10 +29,11 @@ import {
 import { fmtDate } from "@/lib/dates";
 import { Card, Button, Badge, Spinner, Modal, Field, Input, Select } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { supabaseProjectRef } from "@/lib/supabase";
 import type { AuditLogEntry, User, UserRole } from "@/lib/types";
 
 export default function SettingsPage() {
-  const { state, isDemo, seedDemo, wipeAll, user } = useData();
+  const { state, isDemo, seedDemo, wipeAll, user, syncState, syncEnabled, syncNow } = useData();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -306,6 +307,71 @@ export default function SettingsPage() {
         </Card>
       </div>
 
+      {/* -------- Online sync (Supabase) -------- */}
+      <Card
+        title="Online sync (Supabase)"
+        subtitle="Share billing data between your PC, phone, and other devices"
+        action={
+          syncState.configured ? (
+            <Badge tone={syncState.enabled ? "blue" : "slate"}>
+              {syncState.enabled ? "Sync ON" : "Sync OFF"}
+            </Badge>
+          ) : undefined
+        }
+      >
+        {!syncState.configured ? (
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Not configured. Add <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
+            <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to{" "}
+            <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">.env.local</code>, restart the dev server (or rebuild),
+            and run <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">supabase/schema.sql</code> in the Supabase SQL editor.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <span className="text-slate-600 dark:text-slate-300">
+                Project: <strong>{supabaseProjectRef() ?? "?"}</strong>
+              </span>
+              <span className="text-slate-500 dark:text-slate-400">
+                Mode: public access (anon key, no login)
+              </span>
+            </div>
+
+            {syncState.lastSync && (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Last synced: {new Date(syncState.lastSync).toLocaleString()}
+              </p>
+            )}
+            {syncState.lastError && (
+              <p className="text-xs text-red-600 dark:text-red-400">
+                Last sync failed: {syncState.lastError}
+              </p>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => syncNow()} disabled={syncState.syncing || !syncState.enabled} className="min-w-36">
+                <Icon name="refresh" size={15} />
+                {syncState.syncing ? "Syncing…" : "Sync now"}
+              </Button>
+              <Button
+                variant={syncState.enabled ? "secondary" : undefined}
+                disabled={syncState.syncing}
+                onClick={() => syncEnabled(!syncState.enabled)}
+              >
+                <Icon name={syncState.enabled ? "ban" : "check"} size={15} />
+                {syncState.enabled ? "Pause sync" : "Turn sync on"}
+              </Button>
+            </div>
+
+            <p className="text-xs text-slate-400 dark:text-slate-500">
+              Changes sync automatically (last-write-wins) whenever the app is open and online.
+              User accounts and PINs are never uploaded. Because access is public, anyone with the
+              anon key can read your billing data — keep the secret keys private.
+            </p>
+          </div>
+        )}
+      </Card>
+
       {/* -------- Export CSV -------- */}
       <Card title="Export CSV" subtitle="Spreadsheet-friendly exports">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -364,8 +430,8 @@ export default function SettingsPage() {
       <Card title="About">
         <p className="text-sm text-slate-600 dark:text-slate-300">
           <strong>WiFi Billing &amp; Collections</strong> — offline-first PWA.
-          Your data is stored locally in SQLite (WebAssembly) inside this browser
-          and never leaves your device unless you export it.
+          Your data lives in SQLite inside this browser; when online sync is enabled
+          it also mirrors to your Supabase project so your devices stay in step.
         </p>
       </Card>
 

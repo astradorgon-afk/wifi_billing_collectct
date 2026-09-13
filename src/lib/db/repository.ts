@@ -66,8 +66,8 @@ export async function createPlan(input: PlanInput): Promise<Plan> {
   await runBatch(
     [
       {
-        sql: `INSERT INTO plans (id, name, monthly_price, speed_mbps, active) VALUES (?,?,?,?,?)`,
-        params: [plan.id, plan.name, plan.monthly_price, plan.speed_mbps, plan.active],
+        sql: `INSERT INTO plans (id, name, monthly_price, speed_mbps, active, updated_at) VALUES (?,?,?,?,?,?)`,
+        params: [plan.id, plan.name, plan.monthly_price, plan.speed_mbps, plan.active, nowISO()],
       },
       auditStatement("plan.created", "plans", plan.id, null, plan),
     ],
@@ -148,9 +148,9 @@ export async function createCustomer(input: CustomerInput): Promise<Customer> {
   await runBatch(
     [
       {
-        sql: `INSERT INTO customers (id, full_name, phone, address, plan_id, status, archived, archived_at, created_at)
-             VALUES (?,?,?,?,?,?,0,NULL,?)`,
-        params: [c.id, c.full_name, c.phone, c.address, c.plan_id, c.status, c.created_at],
+        sql: `INSERT INTO customers (id, full_name, phone, address, plan_id, status, archived, archived_at, created_at, updated_at)
+             VALUES (?,?,?,?,?,?,0,NULL,?,?)`,
+        params: [c.id, c.full_name, c.phone, c.address, c.plan_id, c.status, c.created_at, c.created_at],
       },
       auditStatement("customer.created", "customers", c.id, null, c),
     ],
@@ -167,8 +167,8 @@ export async function updateCustomer(
   await runBatch(
     [
       {
-        sql: `UPDATE customers SET full_name=?, phone=?, address=?, plan_id=?, status=? WHERE id=?`,
-        params: [input.full_name, input.phone, input.address, input.plan_id, input.status, id],
+        sql: `UPDATE customers SET full_name=?, phone=?, address=?, plan_id=?, status=?, updated_at=? WHERE id=?`,
+        params: [input.full_name, input.phone, input.address, input.plan_id, input.status, nowISO(), id],
       },
       auditStatement("customer.updated", "customers", id, before, input),
     ],
@@ -183,8 +183,8 @@ export async function archiveCustomer(id: string): Promise<void> {
   await runBatch(
     [
       {
-        sql: `UPDATE customers SET archived=1, archived_at=? WHERE id=?`,
-        params: [nowISO(), id],
+        sql: `UPDATE customers SET archived=1, archived_at=?, updated_at=? WHERE id=?`,
+        params: [nowISO(), nowISO(), id],
       },
       auditStatement("customer.archived", "customers", id, before, null),
     ],
@@ -208,6 +208,10 @@ export async function deleteCustomer(id: string): Promise<void> {
     [
       { sql: `DELETE FROM installations WHERE customer_id=?`, params: [id] },
       { sql: `DELETE FROM customers WHERE id=?`, params: [id] },
+      {
+        sql: `INSERT INTO sync_tombstones (tbl, id, at) VALUES ('customers', ?, ?)`,
+        params: [id, nowISO()],
+      },
       auditStatement("customer.deleted", "customers", id, before, null),
     ],
     { immediate: true },
@@ -265,8 +269,8 @@ export async function createInstallation(input: InstallationInput): Promise<Inst
     [
       {
         sql: `INSERT INTO installations
-               (id, customer_id, scheduled_date, started_at, completed_date, installer, status, installation_fee, notes, archived, archived_at, created_at)
-             VALUES (?,?,?,NULL,NULL,?,?,?,?,0,NULL,?)`,
+               (id, customer_id, scheduled_date, started_at, completed_date, installer, status, installation_fee, notes, archived, archived_at, created_at, updated_at)
+             VALUES (?,?,?,NULL,NULL,?,?,?,?,0,NULL,?,?)`,
         params: [
           ins.id,
           ins.customer_id,
@@ -275,6 +279,7 @@ export async function createInstallation(input: InstallationInput): Promise<Inst
           ins.status,
           ins.installation_fee,
           ins.notes,
+          ins.created_at,
           ins.created_at,
         ],
       },
@@ -293,8 +298,8 @@ export async function updateInstallation(
   await runBatch(
     [
       {
-        sql: `UPDATE installations SET scheduled_date=?, installer=?, installation_fee=?, notes=? WHERE id=?`,
-        params: [input.scheduled_date, input.installer, input.installation_fee, input.notes, id],
+        sql: `UPDATE installations SET scheduled_date=?, installer=?, installation_fee=?, notes=?, updated_at=? WHERE id=?`,
+        params: [input.scheduled_date, input.installer, input.installation_fee, input.notes, nowISO(), id],
       },
       auditStatement("installation.updated", "installations", id, before, input),
     ],
@@ -312,11 +317,12 @@ export async function setInstallationStatus(
   const statements: Array<{ sql: string; params?: SqlValue[] }> = [
     {
       sql: `UPDATE installations SET status=?, started_at=COALESCE(started_at, ?),
-              completed_date=? WHERE id=?`,
+              completed_date=?, updated_at=? WHERE id=?`,
       params: [
         status,
         status === "in_progress" || status === "completed" ? nowISO() : null,
         status === "completed" ? todayISO() : null,
+        nowISO(),
         id,
       ],
     },
@@ -329,9 +335,9 @@ export async function setInstallationStatus(
       const today = todayISO();
       statements.push({
         sql: `INSERT OR IGNORE INTO invoices
-                (id, customer_id, period_start, period_end, amount, type, status, due_date, created_at)
-              VALUES (?,?,?,?,?,'installation','unpaid',?,?)`,
-        params: [uid(), str(ins.customer_id), today, today, fee, addDays(today, 7), nowISO()],
+                (id, customer_id, period_start, period_end, amount, type, status, due_date, created_at, updated_at)
+              VALUES (?,?,?,?,?,'installation','unpaid',?,?,?)`,
+        params: [uid(), str(ins.customer_id), today, today, fee, addDays(today, 7), nowISO(), nowISO()],
       });
     }
   }
@@ -349,8 +355,8 @@ export async function deleteInstallation(id: string): Promise<void> {
   await runBatch(
     [
       {
-        sql: `UPDATE installations SET archived=1, archived_at=? WHERE id=?`,
-        params: [nowISO(), id],
+        sql: `UPDATE installations SET archived=1, archived_at=?, updated_at=? WHERE id=?`,
+        params: [nowISO(), nowISO(), id],
       },
       auditStatement("installation.archived", "installations", id, before, null),
     ],
@@ -448,8 +454,8 @@ export async function generateMonthlyInvoices(
     .filter((c) => !already.has(str(c.id)))
     .map((c) => ({
       sql: `INSERT INTO invoices
-              (id, customer_id, period_start, period_end, amount, type, status, due_date, created_at)
-            VALUES (?,?,?,?,?,'monthly','unpaid',?,?)`,
+              (id, customer_id, period_start, period_end, amount, type, status, due_date, created_at, updated_at)
+            VALUES (?,?,?,?,?,'monthly','unpaid',?,?,?)`,
       params: [
         uid(),
         str(c.id),
@@ -457,6 +463,7 @@ export async function generateMonthlyInvoices(
         end,
         num(c.monthly_price),
         due,
+        nowISO(),
         nowISO(),
       ],
     }));
@@ -487,7 +494,7 @@ export async function voidInvoice(id: string): Promise<void> {
   }
   await runBatch(
     [
-      { sql: `UPDATE invoices SET status='void' WHERE id=?`, params: [id] },
+      { sql: `UPDATE invoices SET status='void', updated_at=? WHERE id=?`, params: [nowISO(), id] },
       auditStatement("invoice.voided", "invoices", id, inv, { status: "void" }),
     ],
     { immediate: true },
@@ -581,8 +588,8 @@ export async function recordPayment(input: PaymentInput): Promise<Payment> {
     [
       {
         sql: `INSERT INTO payments (id, invoice_id, amount, method, paid_at, reference, notes,
-                recorded_by, device_id, cancelled, created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,0,?)`,
+                recorded_by, device_id, cancelled, created_at, updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,0,?,?)`,
         params: [
           payment.id,
           payment.invoice_id,
@@ -594,11 +601,12 @@ export async function recordPayment(input: PaymentInput): Promise<Payment> {
           payment.recorded_by,
           payment.device_id,
           payment.created_at,
+          payment.created_at,
         ],
       },
       {
-        sql: `UPDATE invoices SET status = ? WHERE id = ?`,
-        params: [remaining <= 0 ? "paid" : "partial", input.invoice_id],
+        sql: `UPDATE invoices SET status = ?, updated_at = ? WHERE id = ?`,
+        params: [remaining <= 0 ? "paid" : "partial", nowISO(), input.invoice_id],
       },
       auditStatement("payment.created", "payments", payment.id, null, {
         invoice_id: input.invoice_id,
@@ -644,12 +652,12 @@ export async function voidPayment(
   await runBatch(
     [
       {
-        sql: `UPDATE payments SET cancelled=1, cancelled_at=?, cancel_reason=?, cancelled_by=? WHERE id=?`,
-        params: [nowISO(), reason || null, byUserId, paymentId],
+        sql: `UPDATE payments SET cancelled=1, cancelled_at=?, cancel_reason=?, cancelled_by=?, updated_at=? WHERE id=?`,
+        params: [nowISO(), reason || null, byUserId, nowISO(), paymentId],
       },
       {
-        sql: `UPDATE invoices SET status=? WHERE id=?`,
-        params: [nextStatus, inv.id],
+        sql: `UPDATE invoices SET status=?, updated_at=? WHERE id=?`,
+        params: [nextStatus, nowISO(), inv.id],
       },
       auditStatement("payment.voided", "payments", paymentId, p, {
         reason,
@@ -688,9 +696,9 @@ export async function createRequest(
   await runBatch(
     [
       {
-        sql: `INSERT INTO requests (id, type, payload_json, status, requested_by, requested_at)
-              VALUES (?,?,?, 'pending', ?, ?)`,
-        params: [uid(), type, JSON.stringify(payload), requestedBy, nowISO()],
+        sql: `INSERT INTO requests (id, type, payload_json, status, requested_by, requested_at, updated_at)
+              VALUES (?,?,?, 'pending', ?, ?, ?)`,
+        params: [uid(), type, JSON.stringify(payload), requestedBy, nowISO(), nowISO()],
       },
       auditStatement("request.created", "requests", null, null, { type, payload }),
     ],
@@ -745,8 +753,8 @@ export async function decideRequest(
   const status = approve ? "approved" : "rejected";
   const statements: Array<{ sql: string; params?: SqlValue[] }> = [
     {
-      sql: `UPDATE requests SET status=?, decided_by=?, decided_at=?, decision_note=? WHERE id=?`,
-      params: [status, decidedBy, nowISO(), note || null, id],
+      sql: `UPDATE requests SET status=?, decided_by=?, decided_at=?, decision_note=?, updated_at=? WHERE id=?`,
+      params: [status, decidedBy, nowISO(), note || null, nowISO(), id],
     },
     auditStatement("request.decided", "requests", id, req, { status, note }),
   ];
@@ -769,13 +777,13 @@ export async function decideRequest(
 
       statements.push(
         {
-          sql: `UPDATE payments SET cancelled=1, cancelled_at=?, cancel_reason=?, cancelled_by=? WHERE id=?`,
-          params: [nowISO(), `Approved request: ${note || "payment reversal"}`.trim(), decidedBy, payload.paymentId],
+          sql: `UPDATE payments SET cancelled=1, cancelled_at=?, cancel_reason=?, cancelled_by=?, updated_at=? WHERE id=?`,
+          params: [nowISO(), `Approved request: ${note || "payment reversal"}`.trim(), decidedBy, nowISO(), payload.paymentId],
         },
         inv
           ? {
-              sql: `UPDATE invoices SET status=? WHERE id=?`,
-              params: [invoiceStatusFromPayments(num(inv.amount), num(paid?.n)), invId],
+              sql: `UPDATE invoices SET status=?, updated_at=? WHERE id=?`,
+              params: [invoiceStatusFromPayments(num(inv.amount), num(paid?.n)), nowISO(), invId],
             }
           : { sql: `SELECT 1`, params: [] },
       );
@@ -788,8 +796,8 @@ export async function decideRequest(
     await runBatch(
       [
         {
-          sql: `UPDATE requests SET status='pending', decided_by=NULL, decided_at=NULL, decision_note=NULL WHERE id=?`,
-          params: [id],
+          sql: `UPDATE requests SET status='pending', decided_by=NULL, decided_at=NULL, decision_note=NULL, updated_at=? WHERE id=?`,
+          params: [nowISO(), id],
         },
       ],
       { immediate: true },

@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -15,7 +16,13 @@ import { seedDemoData } from "@/lib/seed";
 import { captureInstallPrompt } from "@/lib/pwa";
 import { getDeviceId, ensureDeviceMeta } from "@/lib/device";
 import { setAuditCtx } from "@/lib/db/audit";
-import type { SessionUser } from "@/lib/types";
+import {
+  initSync,
+  subscribeSyncState,
+  setSyncEnabled,
+  syncNow,
+} from "@/lib/sync";
+import type { SessionUser, SyncState } from "@/lib/types";
 
 type DataState = "loading" | "ready" | "error";
 
@@ -61,6 +68,9 @@ interface DataContextValue {
   logout: () => void;
   /** Called after the active user changes their PIN: clears the forced flag. */
   markPinChanged: () => void;
+  syncState: SyncState;
+  syncEnabled: (value: boolean) => Promise<void>;
+  syncNow: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -73,6 +83,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [version, setVersion] = useState(0);
   const [user, setUser] = useState<SessionUser | null>(() => loadSession());
   const [saveWarning, setSaveWarning] = useState<string | null>(null);
+  const [syncState, setSyncState] = useState<SyncState>({
+    configured: false,
+    enabled: false,
+    syncing: false,
+    lastSync: null,
+    lastError: null,
+  });
+
+  const syncEnabled = useCallback((value: boolean) => setSyncEnabled(value), []);
+  const syncNowNow = useCallback(() => syncNow(), []);
 
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
@@ -81,6 +101,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const applyAuditCtx = useCallback((u: SessionUser) => {
     setAuditCtx(u.id, getDeviceId());
   }, []);
+
+  // A completed sync may have pulled rows into the local database — bump the
+  // version so pages re-query. Runs inside the async subscription callback
+  // (never synchronously in an effect body).
+  const syncLastRef = useRef<string | null>(null);
+  const onSyncState = useCallback(
+    (s: SyncState) => {
+      setSyncState(s);
+      if (s.lastSync && s.lastSync !== syncLastRef.current) refresh();
+      syncLastRef.current = s.lastSync;
+    },
+    [refresh],
+  );
 
   // Fresh sessions refresh the stored user so deactivation / forced PIN
   // resets take effect even without signing out.
@@ -116,6 +149,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     captureInstallPrompt();
+    initSync().catch((err) => console.error("Sync init failed:", err));
+    const unsubSync = subscribeSyncState(onSyncState);
 
     const updateOnline = () => setOnline(navigator.onLine);
     updateOnline();
@@ -165,13 +200,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      unsubSync();
       window.removeEventListener("online", updateOnline);
       window.removeEventListener("offline", updateOnline);
       window.removeEventListener("beforeunload", onFlush);
       document.removeEventListener("visibilitychange", onFlush);
       dbSync?.removeEventListener("message", onDbSync);
     };
-  }, [refresh]);
+  }, [refresh, onSyncState]);
 
   const seedDemo = useCallback(async () => {
     await seedDemoData();
@@ -246,6 +282,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       markPinChanged,
+      syncState,
+      syncEnabled,
+      syncNow: syncNowNow,
     }),
     [
       state,
@@ -263,6 +302,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       markPinChanged,
+      syncState,
+      syncEnabled,
+      syncNowNow,
     ],
   );
 

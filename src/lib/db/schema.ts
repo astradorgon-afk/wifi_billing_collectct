@@ -1,6 +1,7 @@
 import type { Database } from "sql.js";
+import { nowISO } from "../dates";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Base schema (v1). Newer columns/tables are added in runMigrations so the
@@ -134,6 +135,50 @@ function runMigration3(db: Database): void {
 }
 
 /**
+ * v4: `updated_at` on every mutable table (last-write-wins sync) plus a
+ * tombstone registry for hard-deleted rows so they propagate to other devices.
+ */
+function runMigration4(db: Database): void {
+  const stamp = nowISO();
+  const addColumn = (table: string, column: string) => {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+  };
+  addColumn("plans", "updated_at");
+  addColumn("customers", "updated_at");
+  addColumn("installations", "updated_at");
+  addColumn("invoices", "updated_at");
+  addColumn("payments", "updated_at");
+  addColumn("requests", "updated_at");
+  addColumn("users", "updated_at");
+
+  // Backfill: existing rows weren't tracked — use their creation timestamp so
+  // the reconcile engine can stamp them (created rows without a timestamp
+  // default to "now").
+  const backfill = (table: string, src: string) => {
+    db.run(
+      `UPDATE ${table} SET updated_at = COALESCE(NULLIF(${src}, ''), ?) WHERE updated_at = ''`,
+      [stamp],
+    );
+  };
+  backfill("plans", stamp); // no creation timestamp column; use build time
+  backfill("customers", "created_at");
+  backfill("installations", "created_at");
+  backfill("invoices", "created_at");
+  backfill("payments", "created_at");
+  backfill("requests", "requested_at");
+  backfill("users", "created_at");
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sync_tombstones (
+      tbl TEXT NOT NULL,
+      id  TEXT NOT NULL,
+      at  TEXT NOT NULL,
+      PRIMARY KEY (tbl, id)
+    );
+  `);
+}
+
+/**
  * Runs pending migrations based on PRAGMA user_version.
  * Future schema changes: bump SCHEMA_VERSION and add a step here.
  */
@@ -154,6 +199,11 @@ export function runMigrations(db: Database): void {
   if (current < 3) {
     runMigration3(db);
     current = 3;
+  }
+
+  if (current < 4) {
+    runMigration4(db);
+    current = 4;
   }
 
   if (current > 1) {

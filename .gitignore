@@ -40,3 +40,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# keepalive standalone package
+scripts/keepalive/node_modules/
+scripts/keepalive/dist/
