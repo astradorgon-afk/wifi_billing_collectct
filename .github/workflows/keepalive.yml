@@ -18,6 +18,10 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Push access so the tick below can reset GitHub's 60-day inactivity
+    # timer; without pushes GitHub silently pauses scheduled workflows.
+    permissions:
+      contents: write
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -31,3 +35,12 @@ jobs:
         run: npm --prefix scripts/keepalive ci && npm --prefix scripts/keepalive run build
       - name: Ping Supabase
         run: npm --prefix scripts/keepalive run start
+      - name: Tick to keep this workflow from being paused
+        if: success()
+        run: |
+          git config user.name "keepalive-bot"
+          git config user.email "keepalive-bot@users.noreply.github.com"
+          echo "tick $(date -u +%Y-%m-%dT%H:%M:%SZ)" > docs/keepalive-tick.txt
+          git add docs/keepalive-tick.txt
+          git commit -m "keepalive tick $(date -u +%Y-%m-%d)" || exit 0
+          git push origin HEAD:main
